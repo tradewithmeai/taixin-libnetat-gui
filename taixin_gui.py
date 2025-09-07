@@ -882,67 +882,47 @@ Then restart this GUI."""
                     dest_bytes = dest_mac
                 
                 # Set the destination MAC
+                self.log_message(f"Setting destination MAC: {dest_mac} -> {dest_bytes.hex()}")
                 self.netat_mgr.dest = dest_bytes
                 
-                # Clear previous packets
-                self.netat_mgr.captured_packets.clear()
+                # Use increased timeout for complex commands
+                timeout = 10 if command.lower() == "at+wnbcfg" else 8
+                self.log_message(f"Using timeout: {timeout} seconds for command: {command}")
+                
+                # Add debugging for packet capture status
+                self.log_message(f"Packet capture active: {hasattr(self.netat_mgr, 'capture_thread') and self.netat_mgr.capture_thread and self.netat_mgr.capture_thread.is_alive()}")
+                self.log_message(f"Captured packets before: {len(self.netat_mgr.captured_packets)}")
+                
+                # Start packet capture if not already running
+                if not (hasattr(self.netat_mgr, 'capture_thread') and self.netat_mgr.capture_thread and self.netat_mgr.capture_thread.is_alive()):
+                    self.log_message("Starting packet capture for AT command")
+                    self.netat_mgr.start_packet_capture()
+                    time.sleep(0.2)  # Small delay to ensure capture is running
                 
                 # Send AT command using original tool's method
+                self.log_message(f"Sending AT command: {command}")
                 self.netat_mgr.netat_send(command, retries=2, retry_delay=0.3)
                 
-                # Wait for response
-                start_time = time.time()
-                response_data = ""
+                # Use the original proven wait_for_responses method
+                self.log_message("Waiting for AT command responses using original method...")
+                devices, responses = self.netat_mgr.wait_for_responses(
+                    timeout_seconds=timeout, 
+                    early_exit_for_commands=True, 
+                    selected_device_only=True
+                )
                 
-                while time.time() - start_time < self.netat_mgr.response_timeout:
-                    for packet in self.netat_mgr.captured_packets[:]:
-                        try:
-                            # Check if this is a UDP packet on our NETAT port
-                            if packet.haslayer(UDP) and packet[UDP].dport == self.netat_mgr.port:
-                                payload = bytes(packet[UDP].payload)
-                                
-                                # Must be at least 15 bytes for valid NETAT packet
-                                if len(payload) >= 15:
-                                    try:
-                                        # Parse using original NETAT protocol
-                                        cmd = WnbNetatCmd.from_bytes(payload)
-                                        
-                                        self.log_message(f"=== Processing AT Response Packet ===")
-                                        self.log_message(f"Command: {cmd.cmd} (expecting {WNB_NETAT_CMD_AT_RESP})")
-                                        self.log_message(f"Dest: {cmd.dest.hex()} (our cookie: {self.netat_mgr.cookie.hex()})")
-                                        self.log_message(f"Src: {cmd.src.hex()}")
-                                        self.log_message(f"Data length: {len(cmd.data)} bytes")
-                                        
-                                        # Check if this is an AT response to our request
-                                        if (cmd.cmd == WNB_NETAT_CMD_AT_RESP and 
-                                            cmd.dest == self.netat_mgr.cookie):
-                                            
-                                            # Extract AT command response text
-                                            if len(cmd.data) > 0:
-                                                response_payload = cmd.data.decode('utf-8', errors='ignore')
-                                                response_data += response_payload
-                                                self.log_message(f"*** GOT AT RESPONSE ***")
-                                                self.log_message(f"Response: {response_payload[:100]}...")
-                                            
-                                    except Exception as e:
-                                        self.log_message(f"Failed to parse AT response packet: {e}")
-                                
-                                # Remove processed packet
-                                self.netat_mgr.captured_packets.remove(packet)
-                                
-                        except Exception as e:
-                            self.log_message(f"Error processing AT response packet: {e}")
-                            continue
-                    
-                    if response_data:
-                        break
-                        
-                    time.sleep(0.1)
+                self.log_message(f"Response collection completed. Devices: {len(devices)}, Responses: {len(responses)}")
                 
-                if response_data:
-                    self.message_queue.put(("command_response", response_data.strip()))
+                # Process responses
+                if responses:
+                    # Combine multiple response parts if any
+                    combined_response = "".join(responses)
+                    self.log_message(f"*** GOT AT RESPONSES ***")
+                    self.log_message(f"Combined response: {combined_response[:200]}...")
+                    self.message_queue.put(("command_response", combined_response))
                 else:
-                    self.message_queue.put(("command_response", "No response received (timeout)"))
+                    self.log_message("No responses received within timeout period")
+                    self.message_queue.put(("command_response", f"No response received (timeout after {timeout}s)"))
                 
             else:
                 # Mock response with realistic WNBCFG example
