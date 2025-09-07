@@ -360,18 +360,18 @@ Then restart this GUI."""
         # Mode (Device uses 'role' parameter in WNBCFG)
         ttk.Label(wifi_frame, text="Mode:").grid(row=1, column=0, sticky="w", padx=(0, 5), pady=2)
         self.mode_var = tk.StringVar()
-        # Use device's actual role values from WNBCFG response
-        mode_combo = ttk.Combobox(wifi_frame, textvariable=self.mode_var, values=["ap", "sta"], width=27)
+        # Use device's actual WIFIMODE values from AT command documentation
+        mode_combo = ttk.Combobox(wifi_frame, textvariable=self.mode_var, values=["ap", "sta", "apsta"], width=27)
         mode_combo.grid(row=1, column=1, sticky="w", padx=5, pady=2)
         ttk.Button(wifi_frame, text="Get", command=lambda: self.get_config("mode")).grid(row=1, column=2, padx=2, pady=2)
         ttk.Button(wifi_frame, text="Set", command=lambda: self.set_config("mode", self.mode_var.get())).grid(row=1, column=3, padx=2, pady=2)
         
-        # Channel (HaLow frequencies, not WiFi channels)
+        # Channel (Index based on AT+CHAN_LIST)
         ttk.Label(wifi_frame, text="Channel:").grid(row=2, column=0, sticky="w", padx=(0, 5), pady=2)
         self.channel_var = tk.StringVar()
-        # HaLow uses specific frequency channels, not 1-14 like WiFi
-        halow_channels = ["8640", "8660", "8680", "8700", "8720", "8740", "8760", "8780"]
-        channel_combo = ttk.Combobox(wifi_frame, textvariable=self.channel_var, values=halow_channels, width=27)
+        # Channel indices that correspond to entries in AT+CHAN_LIST
+        channel_indices = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"]
+        channel_combo = ttk.Combobox(wifi_frame, textvariable=self.channel_var, values=channel_indices, width=27)
         channel_combo.grid(row=2, column=1, sticky="w", padx=5, pady=2)
         ttk.Button(wifi_frame, text="Get", command=lambda: self.get_config("channel")).grid(row=2, column=2, padx=2, pady=2)
         ttk.Button(wifi_frame, text="Set", command=lambda: self.set_config("channel", self.channel_var.get())).grid(row=2, column=3, padx=2, pady=2)
@@ -412,6 +412,34 @@ Then restart this GUI."""
         bss_bw_combo.grid(row=2, column=1, sticky="w", padx=5, pady=2)
         ttk.Button(security_frame, text="Get", command=lambda: self.get_config("bss_bw")).grid(row=2, column=2, padx=2, pady=2)
         ttk.Button(security_frame, text="Set", command=lambda: self.set_config("bss_bw", self.bss_bw_var.get())).grid(row=2, column=3, padx=2, pady=2)
+        
+        # Advanced Configuration
+        advanced_frame = ttk.LabelFrame(scrollable_frame, text="Advanced Configuration", padding="10")
+        advanced_frame.pack(fill="x", padx=10, pady=5)
+        
+        # PAIR control (AT+PAIR)
+        ttk.Label(advanced_frame, text="Pairing:").grid(row=0, column=0, sticky="w", padx=(0, 5), pady=2)
+        self.pair_var = tk.StringVar()
+        pair_combo = ttk.Combobox(advanced_frame, textvariable=self.pair_var, values=["0", "1", "2"], width=27)
+        pair_combo.grid(row=0, column=1, sticky="w", padx=5, pady=2)
+        ttk.Label(advanced_frame, text="(0=stop, 1=start, 2=group 2)", font=('TkDefaultFont', 8)).grid(row=0, column=2, columnspan=2, sticky="w", padx=5)
+        
+        ttk.Button(advanced_frame, text="Set", command=lambda: self.set_config("pair", self.pair_var.get())).grid(row=1, column=1, padx=2, pady=2)
+        
+        # AP Hide control (AT+APHIDE)  
+        ttk.Label(advanced_frame, text="AP Hide:").grid(row=2, column=0, sticky="w", padx=(0, 5), pady=2)
+        self.aphide_var = tk.StringVar()
+        aphide_combo = ttk.Combobox(advanced_frame, textvariable=self.aphide_var, values=["0", "1"], width=27)
+        aphide_combo.grid(row=2, column=1, sticky="w", padx=5, pady=2)
+        ttk.Button(advanced_frame, text="Get", command=lambda: self.get_config("aphide")).grid(row=2, column=2, padx=2, pady=2)
+        ttk.Button(advanced_frame, text="Set", command=lambda: self.set_config("aphide", self.aphide_var.get())).grid(row=2, column=3, padx=2, pady=2)
+        
+        # ACK Timeout (AT+ACK_TO)
+        ttk.Label(advanced_frame, text="ACK Timeout:").grid(row=3, column=0, sticky="w", padx=(0, 5), pady=2)
+        self.ack_to_var = tk.StringVar()
+        ttk.Entry(advanced_frame, textvariable=self.ack_to_var, width=30).grid(row=3, column=1, sticky="w", padx=5, pady=2)
+        ttk.Button(advanced_frame, text="Get", command=lambda: self.get_config("ack_to")).grid(row=3, column=2, padx=2, pady=2)
+        ttk.Button(advanced_frame, text="Set", command=lambda: self.set_config("ack_to", self.ack_to_var.get())).grid(row=3, column=3, padx=2, pady=2)
         
         # Auto-configuration from device
         auto_frame = ttk.LabelFrame(scrollable_frame, text="Auto Configuration", padding="10")
@@ -971,13 +999,16 @@ Then restart this GUI."""
         """Get configuration parameter with proper AT command mapping"""
         # Map GUI parameter names to actual AT command names
         param_mapping = {
-            'mode': 'mode',  # Try mode first, may need to be 'role' or 'wifimode'
-            'channel': 'channel',  # Device uses 'channel' AT command
+            'mode': 'wifimode',  # Use AT+WIFIMODE based on documentation
+            'channel': 'chan_list',  # Device uses 'chan_list' AT command, not 'channel'
             'ssid': 'ssid',
             'txpower': 'txpower',
             'encrypt': 'encrypt',  # Device uses 'encrypt' parameter
             'key': 'key',  # Device uses 'key' parameter  
-            'bss_bw': 'bss_bw'  # Important HaLow bandwidth parameter
+            'bss_bw': 'bss_bw',  # Important HaLow bandwidth parameter
+            'pair': 'pair',  # AT+PAIR pairing control
+            'aphide': 'aphide',  # AT+APHIDE hide AP
+            'ack_to': 'ack_to'  # AT+ACK_TO timeout setting
         }
         
         actual_param = param_mapping.get(param, param)
@@ -1000,16 +1031,25 @@ Then restart this GUI."""
         
         # Map GUI parameter names to actual AT command names
         param_mapping = {
-            'mode': 'mode',  # Try mode first, may need to be 'role' or 'wifimode' 
-            'channel': 'channel',  # Device uses 'channel' AT command
+            'mode': 'wifimode',  # Use AT+WIFIMODE based on documentation
+            'channel': 'chan_list',  # Device uses 'chan_list' AT command, not 'channel'
             'ssid': 'ssid',
             'txpower': 'txpower', 
             'encrypt': 'encrypt',  # Device uses 'encrypt' parameter
             'key': 'key',  # Device uses 'key' parameter
-            'bss_bw': 'bss_bw'  # Important HaLow bandwidth parameter
+            'bss_bw': 'bss_bw',  # Important HaLow bandwidth parameter
+            'pair': 'pair',  # AT+PAIR pairing control  
+            'aphide': 'aphide',  # AT+APHIDE hide AP
+            'ack_to': 'ack_to'  # AT+ACK_TO timeout setting
         }
         
         actual_param = param_mapping.get(param, param)
+        
+        # Special handling for channel - we need to handle chan_list differently
+        if param == 'channel':
+            # For channel setting, we need to set both chan_list and channel index
+            self.set_channel_config(value)
+            return
         
         # Validate that this is a supported SET command
         if actual_param not in PRODUCTION_SET_COMMANDS:
@@ -1018,18 +1058,10 @@ Then restart this GUI."""
                                f"Supported SET commands: {', '.join(PRODUCTION_SET_COMMANDS[:15])}...")
             return
         
-        # Validate channel values for HaLow
-        if param == 'channel':
-            valid_channels = ["8640", "8660", "8680", "8700", "8720", "8740", "8760", "8780"]
-            if value not in valid_channels:
-                messagebox.showerror("Invalid Channel", 
-                                   f"Channel must be one of: {', '.join(valid_channels)}\n"
-                                   f"HaLow uses frequency channels, not WiFi channels 1-14.")
-                return
         
-        # Validate mode values
+        # Validate mode values based on AT+WIFIMODE documentation
         if param == 'mode':
-            valid_modes = ["ap", "sta"]
+            valid_modes = ["ap", "sta", "apsta"]  # Valid AT+WIFIMODE values
             if value not in valid_modes:
                 messagebox.showerror("Invalid Mode", f"Mode must be one of: {', '.join(valid_modes)}")
                 return
@@ -1039,6 +1071,24 @@ Then restart this GUI."""
         self.command_var.set(command)
         self.send_command()
         
+    def set_channel_config(self, channel_index):
+        """Set channel using AT+CHANNEL command with index from chan_list"""
+        try:
+            # Validate channel index
+            channel_idx = int(channel_index)
+            if channel_idx < 1 or channel_idx > 16:
+                messagebox.showerror("Invalid Channel", "Channel index must be between 1-16")
+                return
+                
+            # Use AT+CHANNEL command per documentation
+            command = f"at+channel={channel_idx}"
+            self.log_message(f"Setting channel index {channel_idx} -> {command}")
+            self.command_var.set(command)
+            self.send_command()
+            
+        except ValueError:
+            messagebox.showerror("Invalid Channel", "Channel must be a number (1-16)")
+            
     def save_config_file(self):
         """Save configuration to file"""
         filename = filedialog.asksaveasfilename(
@@ -1126,7 +1176,9 @@ Then restart this GUI."""
                     messagebox.showerror("Scan Error", f"Scan failed: {data}")
                     
                 elif msg_type == "command_response":
-                    self.response_text.insert(tk.END, f"\n--- Response (via original libnetat) ---\n{data}\n")
+                    # Process SSID responses to convert hex to ASCII
+                    processed_data = self.process_ssid_response(data)
+                    self.response_text.insert(tk.END, f"\n--- Response (via original libnetat) ---\n{processed_data}\n")
                     self.response_text.see(tk.END)
                     
                     # Handle auto-configuration responses differently
@@ -1171,6 +1223,20 @@ Then restart this GUI."""
         # Schedule next check
         self.root.after(100, self.process_messages)
         
+    def convert_hex_to_ascii_ssid(self, hex_string):
+        """Convert hex-encoded SSID to ASCII text"""
+        try:
+            # Check if this looks like a hex string
+            if len(hex_string) > 0 and len(hex_string) % 2 == 0 and all(c in '0123456789abcdefABCDEF' for c in hex_string):
+                # Convert hex to bytes, then to ASCII
+                ascii_text = bytes.fromhex(hex_string).decode('utf-8', errors='ignore')
+                # Filter out non-printable characters
+                ascii_text = ''.join(c for c in ascii_text if c.isprintable())
+                return ascii_text if ascii_text else hex_string
+            return hex_string
+        except Exception:
+            return hex_string
+    
     def parse_wnbcfg_response(self, response_data):
         """Parse AT+WNBCFG response and populate configuration fields"""
         try:
@@ -1198,15 +1264,7 @@ Then restart this GUI."""
                 if 'ssid:' in line:
                     # Extract SSID (convert hex to ASCII if needed)
                     ssid_match = line.split('ssid:')[1].split(',')[0].strip()
-                    if len(ssid_match) > 0 and all(c in '0123456789abcdefABCDEF' for c in ssid_match):
-                        try:
-                            # Convert hex SSID to ASCII
-                            ssid_ascii = bytes.fromhex(ssid_match).decode('utf-8', errors='ignore')
-                            config['ssid'] = ssid_ascii
-                        except:
-                            config['ssid'] = ssid_match
-                    else:
-                        config['ssid'] = ssid_match
+                    config['ssid'] = self.convert_hex_to_ascii_ssid(ssid_match)
             
             # Populate GUI fields with parsed values
             if 'ssid' in config and config['ssid']:
@@ -1219,10 +1277,20 @@ Then restart this GUI."""
                     self.mode_var.set(role_map[config['role']])
                     self.log_message(f"Set Mode: {config['role']}")
             
+            # Handle channel list response (e.g., "+ CHAN_LIST:9080,9160,9240")
+            if 'chan_list' in config:
+                self.log_message(f"Channel list: {config['chan_list']}")
+                # Extract channel list and set first channel as default
+                chan_list = config['chan_list'].split(',')
+                if chan_list:
+                    self.channel_var.set('1')  # Default to first channel
+                    self.log_message(f"Set Channel: 1 (from chan_list)")
+                    
+            # Handle primary channel index from WNBCFG or AT+CHANNEL response
             if 'pri_chan' in config:
                 try:
                     channel = int(config['pri_chan'])
-                    if 1 <= channel <= 14:
+                    if 1 <= channel <= 16:
                         self.channel_var.set(str(channel))
                         self.log_message(f"Set Channel: {channel}")
                 except ValueError:
@@ -1246,6 +1314,38 @@ Then restart this GUI."""
                 if key_value:
                     self.key_var.set(key_value)
                     self.log_message(f"Set Key: [hidden]")
+            
+        except Exception as e:
+            self.log_message(f"Error parsing WNBCFG response: {e}")
+            
+    def process_ssid_response(self, response_data):
+        """Process AT command responses to convert hex-encoded SSID values to ASCII"""
+        try:
+            lines = response_data.split('\n')
+            processed_lines = []
+            
+            for line in lines:
+                # Check for SSID responses like '+SSID:0240497ca740'
+                if '+SSID:' in line:
+                    parts = line.split(':', 1)
+                    if len(parts) == 2:
+                        ssid_hex = parts[1].strip()
+                        ssid_ascii = self.convert_hex_to_ascii_ssid(ssid_hex)
+                        processed_line = f"{parts[0]}:{ssid_ascii}" + (f" (hex: {ssid_hex})" if ssid_ascii != ssid_hex else "")
+                        processed_lines.append(processed_line)
+                        continue
+                        
+                # Check for channel list responses like '+ CHAN_LIST:9080,9160,9240'
+                if '+CHAN_LIST:' in line or '+ CHANNEL:' in line:
+                    processed_lines.append(line + " (use channel index 1-N to select)")
+                    continue
+                        
+                processed_lines.append(line)
+                
+            return '\n'.join(processed_lines)
+        except Exception as e:
+            self.log_message(f"Error processing SSID response: {e}")
+            return response_data
             
             if 'bss_bw' in config:
                 self.bss_bw_var.set(config['bss_bw'])
