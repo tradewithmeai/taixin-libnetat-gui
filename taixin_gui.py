@@ -892,19 +892,41 @@ Then restart this GUI."""
                 while time.time() - start_time < self.netat_mgr.response_timeout:
                     for packet in self.netat_mgr.captured_packets[:]:
                         try:
-                            # Look for NETAT AT response packets
-                            if hasattr(packet, 'load') and len(packet.load) >= 19:
-                                data = packet.load
-                                if len(data) >= 19 and data[16] == 4:  # WNB_NETAT_CMD_AT_RESP
-                                    # Extract response payload
-                                    if len(data) > 19:
-                                        response_payload = data[19:].decode('utf-8', errors='ignore')
-                                        response_data += response_payload
-                                    
-                                    # Remove processed packet
-                                    self.netat_mgr.captured_packets.remove(packet)
-                                    
+                            # Check if this is a UDP packet on our NETAT port
+                            if packet.haslayer(UDP) and packet[UDP].dport == self.netat_mgr.port:
+                                payload = bytes(packet[UDP].payload)
+                                
+                                # Must be at least 15 bytes for valid NETAT packet
+                                if len(payload) >= 15:
+                                    try:
+                                        # Parse using original NETAT protocol
+                                        cmd = WnbNetatCmd.from_bytes(payload)
+                                        
+                                        self.log_message(f"=== Processing AT Response Packet ===")
+                                        self.log_message(f"Command: {cmd.cmd} (expecting {WNB_NETAT_CMD_AT_RESP})")
+                                        self.log_message(f"Dest: {cmd.dest.hex()} (our cookie: {self.netat_mgr.cookie.hex()})")
+                                        self.log_message(f"Src: {cmd.src.hex()}")
+                                        self.log_message(f"Data length: {len(cmd.data)} bytes")
+                                        
+                                        # Check if this is an AT response to our request
+                                        if (cmd.cmd == WNB_NETAT_CMD_AT_RESP and 
+                                            cmd.dest == self.netat_mgr.cookie):
+                                            
+                                            # Extract AT command response text
+                                            if len(cmd.data) > 0:
+                                                response_payload = cmd.data.decode('utf-8', errors='ignore')
+                                                response_data += response_payload
+                                                self.log_message(f"*** GOT AT RESPONSE ***")
+                                                self.log_message(f"Response: {response_payload[:100]}...")
+                                            
+                                    except Exception as e:
+                                        self.log_message(f"Failed to parse AT response packet: {e}")
+                                
+                                # Remove processed packet
+                                self.netat_mgr.captured_packets.remove(packet)
+                                
                         except Exception as e:
+                            self.log_message(f"Error processing AT response packet: {e}")
                             continue
                     
                     if response_data:
