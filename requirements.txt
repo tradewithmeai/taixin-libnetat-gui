@@ -1,0 +1,8 @@
+# GUI-specific dependencies
+scapy>=2.4.0
+
+# Original Taixin LibNetat Tool - installed from git
+git+https://github.com/aliosa27/taixin_tools.git
+
+# Additional GUI dependencies
+# tkinter is included with Python on most platforms
