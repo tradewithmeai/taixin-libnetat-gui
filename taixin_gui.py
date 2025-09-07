@@ -1380,17 +1380,17 @@ Then restart this GUI."""
                     import re
                     hex_match = re.search(r'\(hex:\s*([0-9a-fA-F]+)\)', line)
                     if hex_match:
-                        # Format: '+SSID:garbage (hex: hexvalue)' - extract hex from parentheses
-                        ssid_hex = hex_match.group(1)
-                        ssid_ascii = self._convert_hex_to_ascii_ssid(ssid_hex)
-                        processed_line = f"+SSID:{ssid_ascii}" + (f" (hex: {ssid_hex})" if ssid_ascii != ssid_hex else "")
+                        # Format: '+SSID:garbage (hex: actualssid)' - the "hex" value is likely the actual SSID
+                        actual_ssid = hex_match.group(1)
+                        processed_line = f"+SSID:{actual_ssid}"
                     else:
-                        # Format: '+SSID:hexvalue' or '+SSID:textvalue' - original parsing
+                        # Format: '+SSID:hexvalue' or '+SSID:textvalue' - try conversion but fallback to original
                         parts = line.split(':', 1)
                         if len(parts) == 2:
-                            ssid_hex = parts[1].strip()
-                            ssid_ascii = self._convert_hex_to_ascii_ssid(ssid_hex)
-                            processed_line = f"{parts[0]}:{ssid_ascii}" + (f" (hex: {ssid_hex})" if ssid_ascii != ssid_hex else "")
+                            ssid_value = parts[1].strip()
+                            # Try hex conversion, but if it produces garbage, use original
+                            ssid_ascii = self._convert_hex_to_ascii_ssid(ssid_value)
+                            processed_line = f"{parts[0]}:{ssid_ascii}" + (f" (hex: {ssid_value})" if ssid_ascii != ssid_value else "")
                         else:
                             processed_line = line
                     processed_lines.append(processed_line)
