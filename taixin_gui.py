@@ -87,6 +87,7 @@ class TaixinGUI:
         self.selected_device = None
         self.scan_thread = None
         self.is_scanning = False
+        self.auto_configuring = False
         
         # Message queue for thread communication
         self.message_queue = queue.Queue()
@@ -803,23 +804,27 @@ Then restart this GUI."""
         self.log_message("Device scan stopped by user")
         
     def on_device_select(self, event):
-        """Handle device selection"""
+        """Handle device selection and auto-configure"""
         selection = self.device_tree.selection()
         if selection:
             item = self.device_tree.item(selection[0])
             values = item['values']
             
             if values:
+                # Use correct data structure: ("MAC Address", "Device Name", "Signal", "Channel")
                 self.selected_device = {
                     'mac': values[0],
-                    'ip': values[1],
-                    'info': values[2],
-                    'signal': values[3]
+                    'name': values[1] if len(values) > 1 else 'Unknown',
+                    'signal': values[2] if len(values) > 2 else 'Unknown',
+                    'channel': values[3] if len(values) > 3 else 'Unknown'
                 }
                 
-                device_text = f"Selected: {self.selected_device['mac']} - {self.selected_device['info']}"
-                self.selected_device_label.config(text=device_text)
+                device_text = f"Selected: {self.selected_device['mac']} - {self.selected_device['name']}"
+                self.selected_device_label.config(text=device_text + " (Auto-configuring...)")
                 self.log_message(f"Selected device: {self.selected_device['mac']}")
+                
+                # Automatically fetch device configuration
+                self.auto_configure_device()
                 
     def set_command(self, command):
         """Set a command in the command entry"""
@@ -1074,8 +1079,20 @@ Then restart this GUI."""
                 elif msg_type == "command_response":
                     self.response_text.insert(tk.END, f"\n--- Response (via original libnetat) ---\n{data}\n")
                     self.response_text.see(tk.END)
-                    self.status_var.set("Command completed")
-                    self.log_message("Command executed successfully using original tool")
+                    
+                    # Handle auto-configuration responses differently
+                    if self.auto_configuring:
+                        self.status_var.set("Configuration loaded")
+                        self.log_message("Device auto-configuration completed")
+                        self.auto_configuring = False
+                        
+                        # Update device label to show configuration loaded
+                        if self.selected_device:
+                            device_text = f"Selected: {self.selected_device['mac']} - {self.selected_device['name']} ✓"
+                            self.selected_device_label.config(text=device_text)
+                    else:
+                        self.status_var.set("Command completed")
+                        self.log_message("Command executed successfully using original tool")
                     
                     # Check if this is a WNBCFG response and parse it
                     if "+WNBCFG" in data:
@@ -1084,8 +1101,20 @@ Then restart this GUI."""
                 elif msg_type == "command_error":
                     self.response_text.insert(tk.END, f"\n--- Error ---\n{data}\n")
                     self.response_text.see(tk.END)
-                    self.status_var.set("Command failed")
-                    self.log_message(f"Command error: {data}")
+                    
+                    # Handle auto-configuration errors
+                    if self.auto_configuring:
+                        self.status_var.set("Auto-configuration failed")
+                        self.log_message("Device auto-configuration failed")
+                        self.auto_configuring = False
+                        
+                        # Update device label to show error
+                        if self.selected_device:
+                            device_text = f"Selected: {self.selected_device['mac']} - {self.selected_device['name']} (error)"
+                            self.selected_device_label.config(text=device_text)
+                    else:
+                        self.status_var.set("Command failed")
+                        self.log_message(f"Command error: {data}")
                     
         except queue.Empty:
             pass
@@ -1184,9 +1213,14 @@ Then restart this GUI."""
             messagebox.showwarning("No Device", "Please select a device first")
             return
         
-        self.command_var.set("at+wnbcfg")
-        self.send_command()
+        # Set auto-config flag so we know this is automatic
+        self.auto_configuring = True
         self.log_message("Requesting device configuration with AT+WNBCFG")
+        self.status_var.set("Fetching device configuration...")
+        
+        # Send AT+WNBCFG command directly without showing in the command field
+        threading.Thread(target=self._send_command_worker, 
+                        args=("at+wnbcfg", self.selected_device['mac']), daemon=True).start()
     
     def run(self):
         """Start the GUI application"""
