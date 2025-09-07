@@ -26,6 +26,8 @@ try:
     # Try importing from installed package first
     import taixin_tools.libnetat as libnetat
     from taixin_tools.libnetat import ScapyNetAtMgr, WnbNetatCmd, get_network_interfaces
+    from taixin_tools.libnetat import WNB_NETAT_CMD_SCAN_REQ, WNB_NETAT_CMD_SCAN_RESP, WNB_NETAT_CMD_AT_REQ, WNB_NETAT_CMD_AT_RESP
+    from scapy.layers.inet import UDP, IP
     
     # Get the constants if available
     PRODUCTION_SET_COMMANDS = getattr(libnetat, 'PRODUCTION_SET_COMMANDS', [])
@@ -37,6 +39,8 @@ except ImportError:
         # Fallback: try to import directly (if taixin_tools is in path)
         import libnetat
         from libnetat import ScapyNetAtMgr, WnbNetatCmd, PRODUCTION_SET_COMMANDS, PRODUCTION_GET_COMMANDS, get_network_interfaces
+        from libnetat import WNB_NETAT_CMD_SCAN_REQ, WNB_NETAT_CMD_SCAN_RESP, WNB_NETAT_CMD_AT_REQ, WNB_NETAT_CMD_AT_RESP
+        from scapy.layers.inet import UDP, IP
         HAS_LIBNETAT = True
         
     except ImportError:
@@ -50,6 +54,13 @@ except ImportError:
                 HAS_LIBNETAT = False
         except:
             HAS_LIBNETAT = False
+            
+# Fallback constants in case imports fail
+if not HAS_LIBNETAT or HAS_LIBNETAT == "subprocess":
+    WNB_NETAT_CMD_SCAN_REQ = 1
+    WNB_NETAT_CMD_SCAN_RESP = 2  
+    WNB_NETAT_CMD_AT_REQ = 3
+    WNB_NETAT_CMD_AT_RESP = 4
 
 class TaixinGUI:
     """
@@ -671,39 +682,74 @@ Then restart this GUI."""
                     # Process captured packets for NETAT scan responses
                     for packet in self.netat_mgr.captured_packets[:]:
                         try:
-                            # Look for NETAT response packets (18 bytes from debug output)
-                            if hasattr(packet, 'load') and len(packet.load) == 18:
-                                from scapy.layers.l2 import Ether
+                            # Check if this is a UDP packet on our NETAT port
+                            if packet.haslayer(UDP) and packet[UDP].dport == self.netat_mgr.port:
+                                payload = bytes(packet[UDP].payload)
                                 
-                                # Extract MAC address from Ethernet layer  
-                                if Ether in packet:
-                                    src_mac = packet[Ether].src
-                                    self.log_message(f"Processing 18-byte NETAT packet from {src_mac}")
-                                    
-                                    # Create device info based on MAC address
-                                    device_info = {
-                                        'mac': src_mac,
-                                        'name': f'Taixin-{src_mac.replace(":", "")[-6:]}',
-                                        'signal': 'Strong',
-                                        'channel': 'Unknown'
-                                    }
-                                    
-                                    # Add to discovered devices if not already present
-                                    if src_mac not in [d['mac'] for d in devices_found]:
-                                        devices_found.append(device_info)
-                                        self.message_queue.put(("device_found", device_info))
-                                        self.log_message(f"Found Taixin device: {device_info['name']} ({src_mac})")
-                                    
-                                    # Remove processed packet
-                                    self.netat_mgr.captured_packets.remove(packet)
+                                # Add comprehensive debugging
+                                src_ip = packet[IP].src if packet.haslayer(IP) else "unknown"
+                                self.log_message(f"=== Processing NETAT packet ===")
+                                self.log_message(f"Source IP: {src_ip}")
+                                self.log_message(f"Payload size: {len(payload)} bytes")
+                                self.log_message(f"Payload hex: {payload.hex()}")
+                                
+                                # Must be at least 15 bytes for valid NETAT packet (header)
+                                if len(payload) >= 15:
+                                    try:
+                                        # Parse using original NETAT protocol
+                                        cmd = WnbNetatCmd.from_bytes(payload)
+                                        
+                                        self.log_message(f"Parsed NETAT command:")
+                                        self.log_message(f"  Command: {cmd.cmd} (expecting {WNB_NETAT_CMD_SCAN_RESP})")
+                                        self.log_message(f"  Dest: {cmd.dest.hex()} (our cookie: {self.netat_mgr.cookie.hex()})")
+                                        self.log_message(f"  Src: {cmd.src.hex()}")
+                                        self.log_message(f"  Data length: {len(cmd.data)} bytes")
+                                        
+                                        # Check if this is a scan response to our request
+                                        if (cmd.cmd == WNB_NETAT_CMD_SCAN_RESP and 
+                                            cmd.dest == self.netat_mgr.cookie):
+                                            
+                                            # Extract device MAC address from packet source field
+                                            device_mac_bytes = cmd.src
+                                            device_mac = ':'.join(f'{b:02x}' for b in device_mac_bytes)
+                                            
+                                            self.log_message(f"*** FOUND TAIXIN DEVICE ***")
+                                            self.log_message(f"Device MAC: {device_mac}")
+                                            
+                                            # Create device info
+                                            device_info = {
+                                                'mac': device_mac,
+                                                'name': f'Taixin-{device_mac.replace(":", "")[-6:]}',
+                                                'signal': 'Strong',
+                                                'channel': 'Unknown'
+                                            }
+                                            
+                                            # Add to discovered devices if not already present
+                                            if device_mac not in [d['mac'] for d in devices_found]:
+                                                devices_found.append(device_info)
+                                                self.message_queue.put(("device_found", device_info))
+                                                self.log_message(f"Added device to list: {device_info['name']} ({device_mac})")
+                                            else:
+                                                self.log_message(f"Device {device_mac} already discovered")
+                                        else:
+                                            if cmd.cmd != WNB_NETAT_CMD_SCAN_RESP:
+                                                self.log_message(f"Not a scan response (cmd={cmd.cmd})")
+                                            if cmd.dest != self.netat_mgr.cookie:
+                                                self.log_message(f"Not our cookie (got {cmd.dest.hex()})")
+                                                
+                                    except Exception as e:
+                                        self.log_message(f"Failed to parse as NETAT packet: {e}")
+                                        self.log_message(f"Raw payload: {payload[:20].hex()}...")
                                 else:
-                                    self.log_message("18-byte packet found but no Ethernet layer - skipping")
+                                    self.log_message(f"Packet too short ({len(payload)} bytes, need >=15)")
+                                
+                                # Remove processed packet
+                                self.netat_mgr.captured_packets.remove(packet)
+                                
                             else:
-                                # Log other packet types for debugging
+                                # Not a NETAT packet, log for debugging
                                 if hasattr(packet, 'load') and len(packet.load) > 0:
-                                    data = packet.load
-                                    if len(data) > 16:
-                                        self.log_message(f"Non-NETAT packet: {len(data)} bytes, type: {data[16] if len(data) > 16 else 'N/A'}")
+                                    self.log_message(f"Non-NETAT packet: {len(packet.load)} bytes")
                                     
                         except Exception as e:
                             # Log problematic packets for debugging
