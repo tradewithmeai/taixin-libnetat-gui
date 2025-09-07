@@ -260,7 +260,7 @@ Then restart this GUI."""
         devices_frame.pack(fill="both", expand=True, padx=10, pady=5)
         
         # Device list
-        columns = ("MAC Address", "IP Address", "Device Info", "Signal")
+        columns = ("MAC Address", "Device Name", "Signal", "Channel")
         self.device_tree = ttk.Treeview(devices_frame, columns=columns, show="headings", height=10)
         
         for col in columns:
@@ -1027,10 +1027,10 @@ Then restart this GUI."""
                 if msg_type == "device_found":
                     # Add device to tree
                     self.device_tree.insert("", "end", values=(
-                        data['mac'], data['ip'], data['info'], data['signal']
+                        data['mac'], data.get('name', 'Unknown'), data['signal'], data.get('channel', 'Unknown')
                     ))
                     self.discovered_devices[data['mac']] = data
-                    self.log_message(f"Found device: {data['mac']} - {data['info']}")
+                    self.log_message(f"Found device: {data['mac']} - {data.get('name', 'Unknown')}")
                     
                 elif msg_type == "scan_complete":
                     self.is_scanning = False
