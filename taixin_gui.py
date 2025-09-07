@@ -1237,15 +1237,39 @@ Then restart this GUI."""
         self.root.after(100, self.process_messages)
         
     def _convert_hex_to_ascii_ssid(self, hex_or_text: str) -> str:
-        """Convert hex-encoded SSID to ASCII text"""
+        """Convert hex-encoded SSID to ASCII text or show as hex if mostly non-printable"""
         s = (hex_or_text or "").strip()
+        
+        # Check if this looks like a hex string
         if len(s) % 2 == 0 and all(c in "0123456789abcdefABCDEF" for c in s):
             try:
-                decoded = bytes.fromhex(s).decode("utf-8", errors="ignore")
-                decoded = "".join(ch for ch in decoded if ch.isprintable())
-                return decoded or s
+                # Convert hex to bytes
+                byte_data = bytes.fromhex(s)
+                
+                # Count printable ASCII characters
+                printable_chars = []
+                non_printable_count = 0
+                
+                for byte_val in byte_data:
+                    if 32 <= byte_val <= 126:  # Printable ASCII range
+                        printable_chars.append(chr(byte_val))
+                    else:
+                        non_printable_count += 1
+                
+                # If more than half are non-printable, show as hex
+                if non_printable_count > len(byte_data) // 2:
+                    return f"0x{s.upper()}"  # Return as hex display
+                else:
+                    # Mostly printable, return just the printable characters
+                    if printable_chars:
+                        return "".join(printable_chars)
+                    else:
+                        return f"0x{s.upper()}"
+                        
             except Exception:
                 return s
+        
+        # Not hex format, return as-is
         return s
     
     def _apply_chan_list_from_line(self, line: str):
@@ -1350,15 +1374,27 @@ Then restart this GUI."""
             processed_lines = []
             
             for line in lines:
-                # Check for SSID responses like '+SSID:0240497ca740'
+                # Check for SSID responses like '+SSID:0240497ca740' or '+SSID:@I|@ (hex: 0240497ca740)'
                 if '+SSID:' in line:
-                    parts = line.split(':', 1)
-                    if len(parts) == 2:
-                        ssid_hex = parts[1].strip()
+                    # First check if there's already a hex part in parentheses
+                    import re
+                    hex_match = re.search(r'\(hex:\s*([0-9a-fA-F]+)\)', line)
+                    if hex_match:
+                        # Format: '+SSID:garbage (hex: hexvalue)' - extract hex from parentheses
+                        ssid_hex = hex_match.group(1)
                         ssid_ascii = self._convert_hex_to_ascii_ssid(ssid_hex)
-                        processed_line = f"{parts[0]}:{ssid_ascii}" + (f" (hex: {ssid_hex})" if ssid_ascii != ssid_hex else "")
-                        processed_lines.append(processed_line)
-                        continue
+                        processed_line = f"+SSID:{ssid_ascii}" + (f" (hex: {ssid_hex})" if ssid_ascii != ssid_hex else "")
+                    else:
+                        # Format: '+SSID:hexvalue' or '+SSID:textvalue' - original parsing
+                        parts = line.split(':', 1)
+                        if len(parts) == 2:
+                            ssid_hex = parts[1].strip()
+                            ssid_ascii = self._convert_hex_to_ascii_ssid(ssid_hex)
+                            processed_line = f"{parts[0]}:{ssid_ascii}" + (f" (hex: {ssid_hex})" if ssid_ascii != ssid_hex else "")
+                        else:
+                            processed_line = line
+                    processed_lines.append(processed_line)
+                    continue
                         
                 # Check for channel list responses like '+ CHAN_LIST:9080,9160,9240'
                 if '+CHAN_LIST:' in line:
