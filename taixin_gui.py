@@ -62,6 +62,10 @@ if not HAS_LIBNETAT or HAS_LIBNETAT == "subprocess":
     WNB_NETAT_CMD_AT_REQ = 3
     WNB_NETAT_CMD_AT_RESP = 4
 
+# GPT-specified supported command whitelist
+SUPPORTED_GET = {"wifimode", "ssid", "chan_list", "txpower", "encrypt", "key", "bss_bw", "wnbcfg"}
+SUPPORTED_SET = {"wifimode", "ssid", "channel", "txpower", "encrypt", "key", "bss_bw"}
+
 class TaixinGUI:
     """
     Cross-platform GUI for the Taixin LibNetat Tool
@@ -88,6 +92,7 @@ class TaixinGUI:
         self.scan_thread = None
         self.is_scanning = False
         self.auto_configuring = False
+        self._chan_list = []  # Dynamic channel list from AT+CHAN_LIST
         
         # Message queue for thread communication
         self.message_queue = queue.Queue()
@@ -300,7 +305,7 @@ Then restart this GUI."""
         
         ttk.Label(quick_frame, text="Quick Commands:").pack(side="left")
         
-        quick_commands = ["at+wnbcfg", "at+fwinfo?", "at+mode?", "at+ssid?", "at+channel?", "at+txpower?"]
+        quick_commands = ["at+wifimode?", "at+ssid?", "at+chan_list?", "at+txpower?", "at+encrypt?", "at+key?", "at+bss_bw?", "at+wnbcfg"]
         for cmd in quick_commands:
             btn = ttk.Button(quick_frame, text=cmd, command=lambda c=cmd: self.set_command(c))
             btn.pack(side="left", padx=2)
@@ -366,13 +371,12 @@ Then restart this GUI."""
         ttk.Button(wifi_frame, text="Get", command=lambda: self.get_config("mode")).grid(row=1, column=2, padx=2, pady=2)
         ttk.Button(wifi_frame, text="Set", command=lambda: self.set_config("mode", self.mode_var.get())).grid(row=1, column=3, padx=2, pady=2)
         
-        # Channel (Index based on AT+CHAN_LIST)
-        ttk.Label(wifi_frame, text="Channel:").grid(row=2, column=0, sticky="w", padx=(0, 5), pady=2)
+        # Channel (index in CHAN_LIST)
+        ttk.Label(wifi_frame, text="Channel (index in CHAN_LIST):").grid(row=2, column=0, sticky="w", padx=(0, 5), pady=2)
         self.channel_var = tk.StringVar()
-        # Channel indices that correspond to entries in AT+CHAN_LIST
-        channel_indices = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"]
-        channel_combo = ttk.Combobox(wifi_frame, textvariable=self.channel_var, values=channel_indices, width=27)
-        channel_combo.grid(row=2, column=1, sticky="w", padx=5, pady=2)
+        # Dynamic channel list populated from AT+CHAN_LIST response
+        self.channel_combo = ttk.Combobox(wifi_frame, textvariable=self.channel_var, values=[], width=27)
+        self.channel_combo.grid(row=2, column=1, sticky="w", padx=5, pady=2)
         ttk.Button(wifi_frame, text="Get", command=lambda: self.get_config("channel")).grid(row=2, column=2, padx=2, pady=2)
         ttk.Button(wifi_frame, text="Set", command=lambda: self.set_config("channel", self.channel_var.get())).grid(row=2, column=3, padx=2, pady=2)
         
@@ -820,8 +824,8 @@ Then restart this GUI."""
                 time.sleep(2)
                 
                 mock_devices = [
-                    {'mac': '02:40:49:7c:a7:40', 'ip': '192.168.1.100', 'info': 'Demo Taixin Device 1', 'signal': '-45 dBm'},
-                    {'mac': '02:40:49:83:4c:58', 'ip': '192.168.1.101', 'info': 'Demo Taixin Device 2', 'signal': '-52 dBm'}
+                    {'mac': '02:40:49:7c:a7:40', 'name': 'Demo Taixin Device 1', 'signal': '-45 dBm', 'channel': 'Ch 1'},
+                    {'mac': '02:40:49:83:4c:58', 'name': 'Demo Taixin Device 2', 'signal': '-52 dBm', 'channel': 'Ch 2'}
                 ]
                 
                 for device in mock_devices:
@@ -926,8 +930,8 @@ Then restart this GUI."""
                 self.log_message(f"Setting destination MAC: {dest_mac} -> {dest_bytes.hex()}")
                 self.netat_mgr.dest = dest_bytes
                 
-                # Use increased timeout for complex commands
-                timeout = 10 if command.lower() == "at+wnbcfg" else 8
+                # Use increased timeout for complex commands per GPT specification
+                timeout = 10 if command.lower() == "at+wnbcfg" else 6
                 self.log_message(f"Using timeout: {timeout} seconds for command: {command}")
                 
                 # Add debugging for packet capture status
@@ -1014,9 +1018,11 @@ Then restart this GUI."""
         actual_param = param_mapping.get(param, param)
         
         # Validate that this is a supported GET command
-        if actual_param not in PRODUCTION_GET_COMMANDS:
-            self.log_message(f"Warning: {actual_param} not in supported GET commands")
-            self.log_message(f"Supported GET commands: {', '.join(PRODUCTION_GET_COMMANDS[:10])}...")
+        if actual_param not in SUPPORTED_GET:
+            messagebox.showerror("Unsupported Command", 
+                               f"GET command '{actual_param}' is not supported by this device.\n"
+                               f"Supported GET commands: {', '.join(sorted(SUPPORTED_GET))}")
+            return
         
         command = f"at+{actual_param}?"
         self.log_message(f"Getting {param} -> {command}")
@@ -1052,10 +1058,10 @@ Then restart this GUI."""
             return
         
         # Validate that this is a supported SET command
-        if actual_param not in PRODUCTION_SET_COMMANDS:
+        if actual_param not in SUPPORTED_SET:
             messagebox.showerror("Unsupported Command", 
-                               f"Parameter '{actual_param}' is not supported by the device.\n"
-                               f"Supported SET commands: {', '.join(PRODUCTION_SET_COMMANDS[:15])}...")
+                               f"SET command '{actual_param}' is not supported by this device.\n"
+                               f"Supported SET commands: {', '.join(sorted(SUPPORTED_SET))}")
             return
         
         
@@ -1071,13 +1077,20 @@ Then restart this GUI."""
         self.command_var.set(command)
         self.send_command()
         
-    def set_channel_config(self, channel_index):
+    def set_channel_config(self, channel_value):
         """Set channel using AT+CHANNEL command with index from chan_list"""
         try:
-            # Validate channel index
-            channel_idx = int(channel_index)
-            if channel_idx < 1 or channel_idx > 16:
-                messagebox.showerror("Invalid Channel", "Channel index must be between 1-16")
+            # Parse the selected index (accept "1 — 9080" or plain "1")
+            if " — " in channel_value:
+                # Extract index from "1 — 9080" format
+                channel_idx = int(channel_value.split(" — ")[0])
+            else:
+                # Plain index number
+                channel_idx = int(channel_value)
+                
+            # Validate index range
+            if channel_idx < 1 or channel_idx > max(16, len(self._chan_list)):
+                messagebox.showerror("Invalid Channel", f"Channel index must be between 1-{max(16, len(self._chan_list))}")
                 return
                 
             # Use AT+CHANNEL command per documentation
@@ -1086,8 +1099,8 @@ Then restart this GUI."""
             self.command_var.set(command)
             self.send_command()
             
-        except ValueError:
-            messagebox.showerror("Invalid Channel", "Channel must be a number (1-16)")
+        except (ValueError, IndexError):
+            messagebox.showerror("Invalid Channel", "Channel must be a valid index (1-16)")
             
     def save_config_file(self):
         """Save configuration to file"""
@@ -1223,19 +1236,31 @@ Then restart this GUI."""
         # Schedule next check
         self.root.after(100, self.process_messages)
         
-    def convert_hex_to_ascii_ssid(self, hex_string):
+    def _convert_hex_to_ascii_ssid(self, hex_or_text: str) -> str:
         """Convert hex-encoded SSID to ASCII text"""
+        s = (hex_or_text or "").strip()
+        if len(s) % 2 == 0 and all(c in "0123456789abcdefABCDEF" for c in s):
+            try:
+                decoded = bytes.fromhex(s).decode("utf-8", errors="ignore")
+                decoded = "".join(ch for ch in decoded if ch.isprintable())
+                return decoded or s
+            except Exception:
+                return s
+        return s
+    
+    def _apply_chan_list_from_line(self, line: str):
+        """Apply CHAN_LIST from response line and populate channel combobox"""
+        # line like "+CHAN_LIST:9080,9160,9240"
         try:
-            # Check if this looks like a hex string
-            if len(hex_string) > 0 and len(hex_string) % 2 == 0 and all(c in '0123456789abcdefABCDEF' for c in hex_string):
-                # Convert hex to bytes, then to ASCII
-                ascii_text = bytes.fromhex(hex_string).decode('utf-8', errors='ignore')
-                # Filter out non-printable characters
-                ascii_text = ''.join(c for c in ascii_text if c.isprintable())
-                return ascii_text if ascii_text else hex_string
-            return hex_string
-        except Exception:
-            return hex_string
+            freqs = [x.strip() for x in line.split(":", 1)[1].split(",") if x.strip()]
+            self._chan_list = freqs
+            indices = [str(i) for i in range(1, len(freqs) + 1)]
+            self.channel_combo["values"] = [f"{i} — {freq}" for i, freq in zip(indices, freqs)]
+            if not self.channel_var.get() and indices:
+                self.channel_var.set(indices[0])
+            self.log_message(f"Loaded {len(freqs)} channels from CHAN_LIST: {', '.join(freqs)}")
+        except Exception as e:
+            self.log_message(f"Failed to parse CHAN_LIST: {e}")
     
     def parse_wnbcfg_response(self, response_data):
         """Parse AT+WNBCFG response and populate configuration fields"""
@@ -1264,7 +1289,7 @@ Then restart this GUI."""
                 if 'ssid:' in line:
                     # Extract SSID (convert hex to ASCII if needed)
                     ssid_match = line.split('ssid:')[1].split(',')[0].strip()
-                    config['ssid'] = self.convert_hex_to_ascii_ssid(ssid_match)
+                    config['ssid'] = self._convert_hex_to_ascii_ssid(ssid_match)
             
             # Populate GUI fields with parsed values
             if 'ssid' in config and config['ssid']:
@@ -1330,13 +1355,19 @@ Then restart this GUI."""
                     parts = line.split(':', 1)
                     if len(parts) == 2:
                         ssid_hex = parts[1].strip()
-                        ssid_ascii = self.convert_hex_to_ascii_ssid(ssid_hex)
+                        ssid_ascii = self._convert_hex_to_ascii_ssid(ssid_hex)
                         processed_line = f"{parts[0]}:{ssid_ascii}" + (f" (hex: {ssid_hex})" if ssid_ascii != ssid_hex else "")
                         processed_lines.append(processed_line)
                         continue
                         
                 # Check for channel list responses like '+ CHAN_LIST:9080,9160,9240'
-                if '+CHAN_LIST:' in line or '+ CHANNEL:' in line:
+                if '+CHAN_LIST:' in line:
+                    self._apply_chan_list_from_line(line)
+                    processed_lines.append(line + " (select index 1..N to set with AT+CHANNEL=<index>)")
+                    continue
+                    
+                # Check for channel responses
+                if '+ CHANNEL:' in line:
                     processed_lines.append(line + " (use channel index 1-N to select)")
                     continue
                         
