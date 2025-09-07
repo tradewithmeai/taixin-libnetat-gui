@@ -113,9 +113,12 @@ Press F1 to show this dialog anytime."""
         
     def check_dependencies(self):
         """Check if the original libnetat tool is available"""
+        self.log_message(f"Checking dependencies - HAS_LIBNETAT: {HAS_LIBNETAT}")
+        
         if not HAS_LIBNETAT:
             self.status_var.set("Missing dependency: Original libnetat tool not found")
             self.connection_var.set("Dependency Error")
+            self.log_message("Original libnetat tool is not available")
             
             error_msg = """The original Taixin LibNetat Tool is not installed.
 
@@ -133,6 +136,23 @@ Then restart this GUI."""
         else:
             self.status_var.set("Ready - Original libnetat tool available")
             self.connection_var.set("Ready")
+            self.log_message(f"Original libnetat tool is available (mode: {HAS_LIBNETAT})")
+            
+            # Test if we can import the functions we need
+            try:
+                # Test the imports
+                if 'get_network_interfaces' in globals():
+                    self.log_message("get_network_interfaces function is available")
+                else:
+                    self.log_message("WARNING: get_network_interfaces function not found in globals")
+                    
+                if 'ScapyNetAtMgr' in globals():
+                    self.log_message("ScapyNetAtMgr class is available") 
+                else:
+                    self.log_message("WARNING: ScapyNetAtMgr class not found in globals")
+                    
+            except Exception as e:
+                self.log_message(f"Error testing imports: {e}")
             
     def setup_styles(self):
         """Configure cross-platform compatible styles"""
@@ -437,35 +457,71 @@ Then restart this GUI."""
         try:
             if HAS_LIBNETAT and HAS_LIBNETAT is not False and HAS_LIBNETAT != "subprocess":
                 # Use the get_network_interfaces function from libnetat
-                interfaces = get_network_interfaces()
+                try:
+                    # Call the standalone function (not a method on ScapyNetAtMgr)
+                    interfaces = get_network_interfaces()
+                    self.log_message(f"Found {len(interfaces)} network interfaces")
+                except NameError as ne:
+                    self.log_message(f"get_network_interfaces not available: {ne}")
+                    # Fallback to scapy directly
+                    try:
+                        from scapy.arch import get_if_list
+                        interfaces = get_if_list()
+                        self.log_message(f"Using scapy get_if_list: found {len(interfaces)} interfaces")
+                    except Exception as se:
+                        self.log_message(f"Scapy fallback failed: {se}")
+                        interfaces = ["auto"]
+                except Exception as ge:
+                    self.log_message(f"get_network_interfaces failed: {ge}")
+                    # Fallback to scapy directly
+                    try:
+                        from scapy.arch import get_if_list
+                        interfaces = get_if_list()
+                        self.log_message(f"Using scapy get_if_list fallback: found {len(interfaces)} interfaces")
+                    except Exception as se:
+                        self.log_message(f"All interface detection failed: {se}")
+                        interfaces = ["auto"]
                 
                 interface_list = ["auto"]
                 for iface in interfaces:
-                    # Add interface name, try to get IP info if possible
-                    try:
-                        from scapy.arch import get_if_addr
-                        ip = get_if_addr(iface)
-                        if ip and ip != '0.0.0.0':
-                            interface_list.append(f"{iface} - {ip}")
-                        else:
+                    if iface != "auto":  # Don't duplicate auto
+                        # Add interface name, try to get IP info if possible
+                        try:
+                            from scapy.arch import get_if_addr
+                            ip = get_if_addr(iface)
+                            if ip and ip != '0.0.0.0' and ip != '127.0.0.1':
+                                interface_list.append(f"{iface} - {ip}")
+                            else:
+                                interface_list.append(iface)
+                        except:
                             interface_list.append(iface)
-                    except:
-                        interface_list.append(iface)
                 
                 self.interface_combo['values'] = interface_list
-                self.log_message("Network interfaces detected using original libnetat tool")
+                self.log_message(f"Network interfaces loaded: {len(interface_list)} total (including auto)")
                 
             elif HAS_LIBNETAT == "subprocess":
                 # Use subprocess to call the original tool
                 self.log_message("Using subprocess mode to access libnetat")
-                self.interface_combo['values'] = ["auto", "eth0", "wlan0", "en0"]
+                self.interface_combo['values'] = ["auto", "eth0", "wlan0", "en0", "wlan1"]
                 
             else:
                 self.log_message("Original libnetat tool not available - using fallback interfaces")
-                self.interface_combo['values'] = ["auto", "eth0", "wlan0", "en0"]
+                # Try to get basic interface list from scapy if available
+                try:
+                    from scapy.arch import get_if_list
+                    scapy_interfaces = get_if_list()
+                    interface_list = ["auto"] + scapy_interfaces[:5]  # Limit to first 5
+                    self.interface_combo['values'] = interface_list
+                    self.log_message(f"Using scapy-only interface detection: {len(interface_list)} interfaces")
+                except:
+                    self.interface_combo['values'] = ["auto", "eth0", "wlan0", "en0", "wlan1"]
+                    self.log_message("Using hardcoded fallback interfaces")
                 
         except Exception as e:
             self.log_message(f"Error detecting interfaces: {e}")
+            self.log_message(f"Exception type: {type(e).__name__}")
+            import traceback
+            self.log_message(f"Stack trace: {traceback.format_exc()}")
             self.interface_combo['values'] = ["auto"]
             
     def start_scan(self):
