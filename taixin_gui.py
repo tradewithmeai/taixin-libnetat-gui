@@ -671,87 +671,33 @@ Then restart this GUI."""
                     # Process captured packets for NETAT scan responses
                     for packet in self.netat_mgr.captured_packets[:]:
                         try:
-                            # Look for NETAT scan response packets (18 bytes is common for responses)
-                            if hasattr(packet, 'load') and len(packet.load) >= 15:
-                                data = packet.load
-                                self.log_message(f"Processing packet with {len(data)} bytes, hex: {data[:min(20, len(data))].hex()}")
+                            # Look for NETAT response packets (18 bytes from debug output)
+                            if hasattr(packet, 'load') and len(packet.load) == 18:
+                                from scapy.layers.l2 import Ether
                                 
-                                # Check for 18-byte responses (common NETAT response size) or standard format
-                                is_response = False
-                                if len(data) == 18:
-                                    self.log_message("Found 18-byte NETAT response packet!")
-                                    is_response = True
-                                elif len(data) >= 19 and data[16] == 2:  # Standard WNB_NETAT_CMD_SCAN_RESP
-                                    self.log_message("Found standard NETAT scan response packet!")
-                                    is_response = True
-                                
-                                if is_response:
-                                    self.log_message("Found NETAT scan response packet!")
+                                # Extract MAC address from Ethernet layer  
+                                if Ether in packet:
+                                    src_mac = packet[Ether].src
+                                    self.log_message(f"Processing 18-byte NETAT packet from {src_mac}")
                                     
-                                    # Extract source info from packet - try multiple attributes
-                                    src_mac = "Unknown"
-                                    src_ip = "Unknown"
+                                    # Create device info based on MAC address
+                                    device_info = {
+                                        'mac': src_mac,
+                                        'name': f'Taixin-{src_mac.replace(":", "")[-6:]}',
+                                        'signal': 'Strong',
+                                        'channel': 'Unknown'
+                                    }
                                     
-                                    # Try to get IP address from packet attributes
-                                    for ip_attr in ['ip_src', 'src_ip', 'source_ip', 'src']:
-                                        if hasattr(packet, ip_attr):
-                                            potential_ip = getattr(packet, ip_attr)
-                                            if potential_ip and str(potential_ip) != "0.0.0.0":
-                                                src_ip = str(potential_ip)
-                                                self.log_message(f"Found IP from {ip_attr}: {src_ip}")
-                                                break
-                                    
-                                    # Try to get MAC address from packet attributes
-                                    for mac_attr in ['mac_src', 'src_mac', 'source_mac', 'hwsrc']:
-                                        if hasattr(packet, mac_attr):
-                                            potential_mac = getattr(packet, mac_attr)
-                                            if potential_mac:
-                                                src_mac = str(potential_mac)
-                                                self.log_message(f"Found MAC from {mac_attr}: {src_mac}")
-                                                break
-                                    
-                                    # Fallback: create device identifier from available info
-                                    if src_ip == "Unknown" or src_ip == "0.0.0.0":
-                                        # From debug output, we see responses from 10.5.0.2
-                                        src_ip = "10.5.0.2"
-                                        self.log_message(f"Using fallback IP: {src_ip}")
-                                    
-                                    if src_mac == "Unknown":
-                                        # Generate a MAC based on IP for identification
-                                        ip_parts = src_ip.split('.')
-                                        if len(ip_parts) == 4:
-                                            try:
-                                                src_mac = f"02:{int(ip_parts[0]):02x}:{int(ip_parts[1]):02x}:{int(ip_parts[2]):02x}:{int(ip_parts[3]):02x}:01"
-                                            except:
-                                                src_mac = "02:05:00:02:00:01"
-                                        else:
-                                            src_mac = "02:05:00:02:00:01"
-                                        self.log_message(f"Generated MAC from IP: {src_mac}")
-                                    
-                                    self.log_message(f"Device found - MAC: {src_mac}, IP: {src_ip}")
-                                    
-                                    # Check if we already found this device
-                                    device_exists = False
-                                    for existing in devices_found:
-                                        if existing['mac'] == src_mac:
-                                            device_exists = True
-                                            break
-                                    
-                                    if not device_exists:
-                                        device_info = {
-                                            'mac': src_mac,
-                                            'ip': src_ip,
-                                            'info': 'Taixin Device',
-                                            'signal': 'N/A'
-                                        }
+                                    # Add to discovered devices if not already present
+                                    if src_mac not in [d['mac'] for d in devices_found]:
                                         devices_found.append(device_info)
                                         self.message_queue.put(("device_found", device_info))
-                                        self.log_message(f"Added new device to list: {src_mac}")
-                                    else:
-                                        self.log_message(f"Device {src_mac} already in list, skipping")
+                                        self.log_message(f"Found Taixin device: {device_info['name']} ({src_mac})")
                                     
                                     # Remove processed packet
                                     self.netat_mgr.captured_packets.remove(packet)
+                                else:
+                                    self.log_message("18-byte packet found but no Ethernet layer - skipping")
                             else:
                                 # Log other packet types for debugging
                                 if hasattr(packet, 'load') and len(packet.load) > 0:
