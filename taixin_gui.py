@@ -25,7 +25,7 @@ from datetime import datetime
 try:
     # Try importing from installed package first
     import taixin_tools.libnetat as libnetat
-    from taixin_tools.libnetat import ScapyNetAtMgr, WnbNetatCmd
+    from taixin_tools.libnetat import ScapyNetAtMgr, WnbNetatCmd, get_network_interfaces
     
     # Get the constants if available
     PRODUCTION_SET_COMMANDS = getattr(libnetat, 'PRODUCTION_SET_COMMANDS', [])
@@ -36,7 +36,7 @@ except ImportError:
     try:
         # Fallback: try to import directly (if taixin_tools is in path)
         import libnetat
-        from libnetat import ScapyNetAtMgr, WnbNetatCmd, PRODUCTION_SET_COMMANDS, PRODUCTION_GET_COMMANDS
+        from libnetat import ScapyNetAtMgr, WnbNetatCmd, PRODUCTION_SET_COMMANDS, PRODUCTION_GET_COMMANDS, get_network_interfaces
         HAS_LIBNETAT = True
         
     except ImportError:
@@ -268,7 +268,7 @@ Then restart this GUI."""
         
         ttk.Label(quick_frame, text="Quick Commands:").pack(side="left")
         
-        quick_commands = ["at+fwinfo?", "at+mode?", "at+ssid?", "at+channel?", "at+txpower?"]
+        quick_commands = ["at+wnbcfg", "at+fwinfo?", "at+mode?", "at+ssid?", "at+channel?", "at+txpower?"]
         for cmd in quick_commands:
             btn = ttk.Button(quick_frame, text=cmd, command=lambda c=cmd: self.set_command(c))
             btn.pack(side="left", padx=2)
@@ -368,6 +368,14 @@ Then restart this GUI."""
         ttk.Button(security_frame, text="Get", command=lambda: self.get_config("psk")).grid(row=1, column=2, padx=2, pady=2)
         ttk.Button(security_frame, text="Set", command=lambda: self.set_config("psk", self.psk_var.get())).grid(row=1, column=3, padx=2, pady=2)
         
+        # Auto-configuration from device
+        auto_frame = ttk.LabelFrame(scrollable_frame, text="Auto Configuration", padding="10")
+        auto_frame.pack(fill="x", padx=10, pady=5)
+        
+        ttk.Label(auto_frame, text="Get current device configuration:").pack(side="left")
+        ttk.Button(auto_frame, text="Auto Configure from Device", 
+                 command=self.auto_configure_device, style='Scan.TButton').pack(side="left", padx=10)
+        
         # Configuration file operations
         file_frame = ttk.LabelFrame(scrollable_frame, text="Configuration Files", padding="10")
         file_frame.pack(fill="x", padx=10, pady=5)
@@ -428,13 +436,21 @@ Then restart this GUI."""
         """Detect available network interfaces using the original tool"""
         try:
             if HAS_LIBNETAT and HAS_LIBNETAT is not False and HAS_LIBNETAT != "subprocess":
-                # Use the imported libnetat directly
-                temp_mgr = ScapyNetAtMgr("auto", debug=False)
-                interfaces = temp_mgr.get_available_interfaces()
+                # Use the get_network_interfaces function from libnetat
+                interfaces = get_network_interfaces()
                 
                 interface_list = ["auto"]
                 for iface in interfaces:
-                    interface_list.append(f"{iface['name']} - {iface.get('ip', 'N/A')}")
+                    # Add interface name, try to get IP info if possible
+                    try:
+                        from scapy.arch import get_if_addr
+                        ip = get_if_addr(iface)
+                        if ip and ip != '0.0.0.0':
+                            interface_list.append(f"{iface} - {ip}")
+                        else:
+                            interface_list.append(iface)
+                    except:
+                        interface_list.append(iface)
                 
                 self.interface_combo['values'] = interface_list
                 self.log_message("Network interfaces detected using original libnetat tool")
@@ -490,19 +506,70 @@ Then restart this GUI."""
         try:
             if HAS_LIBNETAT and HAS_LIBNETAT is not False and HAS_LIBNETAT != "subprocess":
                 # Use the original libnetat tool directly
-                self.netat_mgr = ScapyNetAtMgr(interface, debug=False)
-                devices = self.netat_mgr.scan_devices(timeout)
+                self.netat_mgr = ScapyNetAtMgr(interface, debug=True, scan_timeout=timeout)
                 
-                for device in devices:
-                    device_info = {
-                        'mac': device.get('mac', 'Unknown'),
-                        'ip': device.get('ip', 'Unknown'),
-                        'info': device.get('info', 'Taixin Device'),
-                        'signal': device.get('signal', 'N/A')
-                    }
-                    self.message_queue.put(("device_found", device_info))
+                # Start packet capture before scanning
+                self.netat_mgr.start_packet_capture()
+                
+                # Clear any previous packets
+                self.netat_mgr.captured_packets.clear()
+                
+                # Send scan packets
+                scan_success = self.netat_mgr.netat_scan(retries=3, retry_delay=0.5)
+                
+                if not scan_success:
+                    self.message_queue.put(("scan_error", "Failed to send scan packets"))
+                    return
+                
+                # Wait for responses with periodic checks
+                start_time = time.time()
+                devices_found = []
+                
+                while time.time() - start_time < timeout:
+                    # Process captured packets for NETAT scan responses
+                    for packet in self.netat_mgr.captured_packets[:]:
+                        try:
+                            # Look for NETAT scan response packets
+                            if hasattr(packet, 'load') and len(packet.load) >= 19:
+                                # NETAT packet structure analysis
+                                data = packet.load
+                                if len(data) >= 19 and data[16] == 2:  # WNB_NETAT_CMD_SCAN_RESP
+                                    # Extract source MAC from packet
+                                    if hasattr(packet, 'src'):
+                                        src_mac = packet.src
+                                        src_ip = packet[0].src if hasattr(packet, '__getitem__') else "Unknown"
+                                    else:
+                                        src_mac = "Unknown"
+                                        src_ip = "Unknown"
+                                    
+                                    # Check if we already found this device
+                                    device_exists = False
+                                    for existing in devices_found:
+                                        if existing['mac'] == src_mac:
+                                            device_exists = True
+                                            break
+                                    
+                                    if not device_exists:
+                                        device_info = {
+                                            'mac': src_mac,
+                                            'ip': src_ip,
+                                            'info': 'Taixin Device',
+                                            'signal': 'N/A'
+                                        }
+                                        devices_found.append(device_info)
+                                        self.message_queue.put(("device_found", device_info))
+                                    
+                                    # Remove processed packet
+                                    self.netat_mgr.captured_packets.remove(packet)
+                                    
+                        except Exception as e:
+                            # Skip problematic packets
+                            continue
                     
-                self.message_queue.put(("scan_complete", len(devices)))
+                    # Short sleep to prevent busy waiting
+                    time.sleep(0.1)
+                
+                self.message_queue.put(("scan_complete", len(devices_found)))
                 
             else:
                 # Mock scanning for testing
@@ -510,8 +577,8 @@ Then restart this GUI."""
                 time.sleep(2)
                 
                 mock_devices = [
-                    {'mac': '00:11:22:33:44:55', 'ip': '192.168.1.100', 'info': 'Demo Taixin Device 1', 'signal': '-45 dBm'},
-                    {'mac': '00:11:22:33:44:66', 'ip': '192.168.1.101', 'info': 'Demo Taixin Device 2', 'signal': '-52 dBm'}
+                    {'mac': '02:40:49:7c:a7:40', 'ip': '192.168.1.100', 'info': 'Demo Taixin Device 1', 'signal': '-45 dBm'},
+                    {'mac': '02:40:49:83:4c:58', 'ip': '192.168.1.101', 'info': 'Demo Taixin Device 2', 'signal': '-52 dBm'}
                 ]
                 
                 for device in mock_devices:
@@ -582,15 +649,81 @@ Then restart this GUI."""
         """Background worker for sending commands"""
         try:
             if HAS_LIBNETAT and HAS_LIBNETAT != "subprocess" and self.netat_mgr:
-                # Use the original libnetat tool
-                response = self.netat_mgr.send_at_command(command, dest_mac)
-                self.message_queue.put(("command_response", response))
+                # Convert MAC address string to bytes if needed
+                if isinstance(dest_mac, str):
+                    if ':' in dest_mac:
+                        # Convert "aa:bb:cc:dd:ee:ff" to bytes
+                        dest_bytes = bytes.fromhex(dest_mac.replace(':', ''))
+                    else:
+                        # Assume it's already in the right format
+                        dest_bytes = dest_mac.encode()
+                else:
+                    dest_bytes = dest_mac
+                
+                # Set the destination MAC
+                self.netat_mgr.dest = dest_bytes
+                
+                # Clear previous packets
+                self.netat_mgr.captured_packets.clear()
+                
+                # Send AT command using original tool's method
+                self.netat_mgr.netat_send(command, retries=2, retry_delay=0.3)
+                
+                # Wait for response
+                start_time = time.time()
+                response_data = ""
+                
+                while time.time() - start_time < self.netat_mgr.response_timeout:
+                    for packet in self.netat_mgr.captured_packets[:]:
+                        try:
+                            # Look for NETAT AT response packets
+                            if hasattr(packet, 'load') and len(packet.load) >= 19:
+                                data = packet.load
+                                if len(data) >= 19 and data[16] == 4:  # WNB_NETAT_CMD_AT_RESP
+                                    # Extract response payload
+                                    if len(data) > 19:
+                                        response_payload = data[19:].decode('utf-8', errors='ignore')
+                                        response_data += response_payload
+                                    
+                                    # Remove processed packet
+                                    self.netat_mgr.captured_packets.remove(packet)
+                                    
+                        except Exception as e:
+                            continue
+                    
+                    if response_data:
+                        break
+                        
+                    time.sleep(0.1)
+                
+                if response_data:
+                    self.message_queue.put(("command_response", response_data.strip()))
+                else:
+                    self.message_queue.put(("command_response", "No response received (timeout)"))
                 
             else:
-                # Mock response
+                # Mock response with realistic WNBCFG example
                 time.sleep(1)
-                mock_response = f"Demo response for '{command}' from {dest_mac}\n" + \
-                              f"Status: OK (using demo mode - install original tool for real functionality)"
+                if command.upper() == "AT+WNBCFG":
+                    mock_response = "+WNBCFG\n" + \
+                                  "role:ap, bss_bw:2, encrypt:1, forward:1, key_set:1, mkey_set:0, join_group:0, bssid_set:0\n" + \
+                                  "freq_range:0~0\n" + \
+                                  "chan_list: 8640, 8660,\n" + \
+                                  "ssid:0240497ca740, r_ssid:, addr:02:40:49:7c:a7:40\n" + \
+                                  "max_sta:8, tx_mcs:255, acs_enable:1, acs_tmo:0, tx_bw:2\n" + \
+                                  "tx_power:0, pri_chan:3\n" + \
+                                  "psconnect_period:60, psconnect_roundup:4\n" + \
+                                  "wkio_mode:0, psmode:0, auto_chsw:0, acktmo:0\n" + \
+                                  "bss_max_idle:300, beacon_int:500, dtim_period:2\n" + \
+                                  "group_aid:0, agg_cnt:0, aplost_time:10, roam_rssi_th:-65, roam_int:10\n" + \
+                                  "dhcpc_en:0, dhcp_host:, ack_tmo:0, reassoc_wkhost:0, mcast_filter:0\n" + \
+                                  "STA0:[02:40:49:83:4c:58, pair:1, encrypt:1, connect:0]\n" + \
+                                  "psk:40a77c4902    auto_role:1, roaming:0, dupfilter:0, pa_pwrctrl_dis:0, pair_autostop:0, supper_pwr_dis:0\n" + \
+                                  "not_auto_save:0, dcdc13:0, auto_pair:0, heartbeat_int:500, auto_sleep_time:10000, wkup_io:0, wkio_edge:0\n" + \
+                                  "\n(Demo mode - install original tool for real functionality)"
+                else:
+                    mock_response = f"Demo response for '{command}' from {dest_mac}\n" + \
+                                  f"Status: OK (using demo mode - install original tool for real functionality)"
                 self.message_queue.put(("command_response", mock_response))
                 
         except Exception as e:
@@ -704,6 +837,10 @@ Then restart this GUI."""
                     self.status_var.set("Command completed")
                     self.log_message("Command executed successfully using original tool")
                     
+                    # Check if this is a WNBCFG response and parse it
+                    if "+WNBCFG" in data:
+                        self.parse_wnbcfg_response(data)
+                    
                 elif msg_type == "command_error":
                     self.response_text.insert(tk.END, f"\n--- Error ---\n{data}\n")
                     self.response_text.see(tk.END)
@@ -716,6 +853,101 @@ Then restart this GUI."""
         # Schedule next check
         self.root.after(100, self.process_messages)
         
+    def parse_wnbcfg_response(self, response_data):
+        """Parse AT+WNBCFG response and populate configuration fields"""
+        try:
+            self.log_message("Parsing WNBCFG response to populate configuration fields")
+            
+            # Extract configuration values from the response
+            config = {}
+            
+            lines = response_data.split('\n')
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith('+') or line.startswith('(Demo'):
+                    continue
+                    
+                # Parse key:value pairs
+                if ':' in line:
+                    # Handle multiple key:value pairs in one line
+                    parts = line.split(', ')
+                    for part in parts:
+                        if ':' in part:
+                            key, value = part.split(':', 1)
+                            config[key.strip()] = value.strip()
+                
+                # Parse special formats like "ssid:value, r_ssid:value, addr:value"
+                if 'ssid:' in line:
+                    # Extract SSID (convert hex to ASCII if needed)
+                    ssid_match = line.split('ssid:')[1].split(',')[0].strip()
+                    if len(ssid_match) > 0 and all(c in '0123456789abcdefABCDEF' for c in ssid_match):
+                        try:
+                            # Convert hex SSID to ASCII
+                            ssid_ascii = bytes.fromhex(ssid_match).decode('utf-8', errors='ignore')
+                            config['ssid'] = ssid_ascii
+                        except:
+                            config['ssid'] = ssid_match
+                    else:
+                        config['ssid'] = ssid_match
+            
+            # Populate GUI fields with parsed values
+            if 'ssid' in config and config['ssid']:
+                self.ssid_var.set(config['ssid'])
+                self.log_message(f"Set SSID: {config['ssid']}")
+            
+            if 'role' in config:
+                role_map = {'ap': 'ap', 'sta': 'sta', 'apsta': 'apsta'}
+                if config['role'] in role_map:
+                    self.mode_var.set(role_map[config['role']])
+                    self.log_message(f"Set Mode: {config['role']}")
+            
+            if 'pri_chan' in config:
+                try:
+                    channel = int(config['pri_chan'])
+                    if 1 <= channel <= 14:
+                        self.channel_var.set(str(channel))
+                        self.log_message(f"Set Channel: {channel}")
+                except ValueError:
+                    pass
+            
+            if 'tx_power' in config:
+                try:
+                    tx_power = int(config['tx_power'])
+                    if 0 <= tx_power <= 20:
+                        self.txpower_var.set(str(tx_power))
+                        self.log_message(f"Set TX Power: {tx_power}")
+                except ValueError:
+                    pass
+            
+            if 'encrypt' in config:
+                encrypt_map = {'0': 'NONE', '1': 'WPA-PSK', '2': 'WPA2-PSK'}
+                if config['encrypt'] in encrypt_map:
+                    self.keymgmt_var.set(encrypt_map[config['encrypt']])
+                    self.log_message(f"Set Security: {encrypt_map[config['encrypt']]}")
+            
+            if 'psk' in config and config['psk']:
+                self.psk_var.set(config['psk'])
+                self.log_message("Set PSK from device configuration")
+            
+            # Show success message
+            messagebox.showinfo("Configuration Loaded", 
+                              "Device configuration has been loaded into the GUI fields.\n\n" +
+                              "You can now modify settings and use the Set buttons to update the device.")
+            
+        except Exception as e:
+            self.log_message(f"Error parsing WNBCFG response: {e}")
+            # Don't show error to user as this is optional functionality
+    
+    def auto_configure_device(self):
+        """Automatically get device configuration using AT+WNBCFG"""
+        if not self.selected_device:
+            messagebox.showwarning("No Device", "Please select a device first")
+            return
+        
+        self.command_var.set("at+wnbcfg")
+        self.send_command()
+        self.log_message("Requesting device configuration with AT+WNBCFG")
+    
     def run(self):
         """Start the GUI application"""
         self.root.mainloop()
