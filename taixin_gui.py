@@ -433,6 +433,17 @@ Then restart this GUI."""
         self.log_message("Taixin LibNetat GUI started")
         self.log_message("Powered by the original Taixin LibNetat Tool by aliosa27")
         self.log_message("Original project: https://github.com/aliosa27/taixin_tools")
+        self.log_message(f"Python version: {sys.version}")
+        self.log_message(f"Platform: {platform.system()} {platform.release()}")
+        
+        # Log import status
+        try:
+            import scapy
+            self.log_message(f"Scapy version: {scapy.VERSION}")
+        except:
+            self.log_message("Scapy version: Unknown")
+            
+        self.log_message(f"LibNetat integration status: {HAS_LIBNETAT}")
         
     def create_status_bar(self):
         """Create the status bar"""
@@ -537,6 +548,7 @@ Then restart this GUI."""
             return
             
         interface = self.interface_var.get()
+        clean_interface = self._extract_interface_name(interface)
         timeout = int(self.scan_timeout_var.get())
         
         self.is_scanning = True
@@ -544,7 +556,9 @@ Then restart this GUI."""
         self.stop_scan_btn.config(state="normal")
         self.progress_bar.start()
         
-        self.log_message(f"Starting device scan using original libnetat tool on {interface}")
+        self.log_message(f"Starting device scan using original libnetat tool")
+        self.log_message(f"Selected interface: '{interface}' -> Clean interface: '{clean_interface}'")
+        self.log_message(f"Scan timeout: {timeout} seconds")
         self.status_var.set("Scanning for devices...")
         
         # Clear previous results
@@ -552,36 +566,63 @@ Then restart this GUI."""
             self.device_tree.delete(item)
         self.discovered_devices.clear()
         
-        # Start scan in background thread
+        # Start scan in background thread with clean interface name
         self.scan_thread = threading.Thread(target=self._scan_worker, 
-                                          args=(interface, timeout), daemon=True)
+                                          args=(clean_interface, timeout), daemon=True)
         self.scan_thread.start()
         
     def _scan_worker(self, interface, timeout):
         """Background worker for device scanning"""
         try:
             if HAS_LIBNETAT and HAS_LIBNETAT is not False and HAS_LIBNETAT != "subprocess":
+                # Extract just the interface name (remove IP info if present)
+                clean_interface = self._extract_interface_name(interface)
+                self.log_message(f"Using interface '{clean_interface}' (extracted from '{interface}')")
+                
                 # Use the original libnetat tool directly
-                self.netat_mgr = ScapyNetAtMgr(interface, debug=True, scan_timeout=timeout)
+                self.netat_mgr = ScapyNetAtMgr(clean_interface, debug=True, scan_timeout=timeout)
                 
                 # Start packet capture before scanning
-                self.netat_mgr.start_packet_capture()
+                self.log_message("Starting packet capture...")
+                try:
+                    self.netat_mgr.start_packet_capture()
+                    self.log_message("Packet capture started successfully")
+                except Exception as e:
+                    self.log_message(f"Failed to start packet capture: {e}")
+                    self.message_queue.put(("scan_error", f"Failed to start packet capture: {e}"))
+                    return
                 
                 # Clear any previous packets
                 self.netat_mgr.captured_packets.clear()
+                self.log_message("Cleared previous captured packets")
                 
                 # Send scan packets
-                scan_success = self.netat_mgr.netat_scan(retries=3, retry_delay=0.5)
+                self.log_message("Sending NETAT scan packets...")
+                try:
+                    scan_success = self.netat_mgr.netat_scan(retries=3, retry_delay=0.5)
+                    self.log_message(f"Scan packet sending result: {scan_success}")
+                except Exception as e:
+                    self.log_message(f"Exception during netat_scan: {e}")
+                    self.message_queue.put(("scan_error", f"Failed to send scan packets: {e}"))
+                    return
                 
                 if not scan_success:
-                    self.message_queue.put(("scan_error", "Failed to send scan packets"))
+                    self.message_queue.put(("scan_error", "Failed to send scan packets - check interface name and network permissions"))
                     return
                 
                 # Wait for responses with periodic checks
                 start_time = time.time()
                 devices_found = []
+                packet_count = 0
+                
+                self.log_message(f"Waiting for scan responses for {timeout} seconds...")
                 
                 while time.time() - start_time < timeout:
+                    current_packet_count = len(self.netat_mgr.captured_packets)
+                    if current_packet_count != packet_count:
+                        self.log_message(f"Captured packets: {current_packet_count} (new: {current_packet_count - packet_count})")
+                        packet_count = current_packet_count
+                    
                     # Process captured packets for NETAT scan responses
                     for packet in self.netat_mgr.captured_packets[:]:
                         try:
@@ -589,7 +630,11 @@ Then restart this GUI."""
                             if hasattr(packet, 'load') and len(packet.load) >= 19:
                                 # NETAT packet structure analysis
                                 data = packet.load
+                                self.log_message(f"Processing packet with {len(data)} bytes, command type: {data[16] if len(data) > 16 else 'N/A'}")
+                                
                                 if len(data) >= 19 and data[16] == 2:  # WNB_NETAT_CMD_SCAN_RESP
+                                    self.log_message("Found NETAT scan response packet!")
+                                    
                                     # Extract source MAC from packet
                                     if hasattr(packet, 'src'):
                                         src_mac = packet.src
@@ -597,6 +642,8 @@ Then restart this GUI."""
                                     else:
                                         src_mac = "Unknown"
                                         src_ip = "Unknown"
+                                    
+                                    self.log_message(f"Device found - MAC: {src_mac}, IP: {src_ip}")
                                     
                                     # Check if we already found this device
                                     device_exists = False
@@ -614,18 +661,39 @@ Then restart this GUI."""
                                         }
                                         devices_found.append(device_info)
                                         self.message_queue.put(("device_found", device_info))
+                                        self.log_message(f"Added new device to list: {src_mac}")
+                                    else:
+                                        self.log_message(f"Device {src_mac} already in list, skipping")
                                     
                                     # Remove processed packet
                                     self.netat_mgr.captured_packets.remove(packet)
+                            else:
+                                # Log other packet types for debugging
+                                if hasattr(packet, 'load') and len(packet.load) > 0:
+                                    data = packet.load
+                                    if len(data) > 16:
+                                        self.log_message(f"Non-NETAT packet: {len(data)} bytes, type: {data[16] if len(data) > 16 else 'N/A'}")
                                     
                         except Exception as e:
-                            # Skip problematic packets
+                            # Log problematic packets for debugging
+                            self.log_message(f"Error processing packet: {e}")
                             continue
                     
                     # Short sleep to prevent busy waiting
-                    time.sleep(0.1)
+                    time.sleep(0.2)  # Slightly longer for better logging
+                
+                self.log_message(f"Scan completed. Total devices found: {len(devices_found)}")
+                self.log_message(f"Final captured packet count: {len(self.netat_mgr.captured_packets)}")
                 
                 self.message_queue.put(("scan_complete", len(devices_found)))
+                
+                # Stop packet capture to clean up
+                try:
+                    if hasattr(self.netat_mgr, 'stop_packet_capture'):
+                        self.netat_mgr.stop_packet_capture()
+                        self.log_message("Packet capture stopped")
+                except Exception as e:
+                    self.log_message(f"Error stopping packet capture: {e}")
                 
             else:
                 # Mock scanning for testing
@@ -644,7 +712,9 @@ Then restart this GUI."""
                 self.message_queue.put(("scan_complete", len(mock_devices)))
                 
         except Exception as e:
-            self.message_queue.put(("scan_error", str(e)))
+            import traceback
+            error_details = f"{str(e)}\n\nFull traceback:\n{traceback.format_exc()}"
+            self.message_queue.put(("scan_error", error_details))
             
     def stop_scan(self):
         """Stop device scanning"""
@@ -701,10 +771,23 @@ Then restart this GUI."""
         threading.Thread(target=self._send_command_worker, 
                         args=(command, self.selected_device['mac']), daemon=True).start()
         
+    def _extract_interface_name(self, interface_string):
+        """Extract just the interface name from formatted string like 'en7 - 10.10.1.2'"""
+        if interface_string == "auto":
+            return "auto"
+        
+        # If it contains " - ", split and take the first part
+        if " - " in interface_string:
+            return interface_string.split(" - ")[0].strip()
+        
+        # Otherwise return as-is
+        return interface_string
+    
     def _send_command_worker(self, command, dest_mac):
         """Background worker for sending commands"""
         try:
             if HAS_LIBNETAT and HAS_LIBNETAT != "subprocess" and self.netat_mgr:
+                self.log_message(f"Sending command '{command}' to device {dest_mac}")
                 # Convert MAC address string to bytes if needed
                 if isinstance(dest_mac, str):
                     if ':' in dest_mac:
@@ -783,7 +866,9 @@ Then restart this GUI."""
                 self.message_queue.put(("command_response", mock_response))
                 
         except Exception as e:
-            self.message_queue.put(("command_error", str(e)))
+            import traceback
+            error_details = f"{str(e)}\n\nFull traceback:\n{traceback.format_exc()}"
+            self.message_queue.put(("command_error", error_details))
             
     def get_config(self, param):
         """Get configuration parameter"""
