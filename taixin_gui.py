@@ -357,18 +357,22 @@ Then restart this GUI."""
         ttk.Button(wifi_frame, text="Get", command=lambda: self.get_config("ssid")).grid(row=0, column=2, padx=2, pady=2)
         ttk.Button(wifi_frame, text="Set", command=lambda: self.set_config("ssid", self.ssid_var.get())).grid(row=0, column=3, padx=2, pady=2)
         
-        # Mode
+        # Mode (Device uses 'role' parameter in WNBCFG)
         ttk.Label(wifi_frame, text="Mode:").grid(row=1, column=0, sticky="w", padx=(0, 5), pady=2)
         self.mode_var = tk.StringVar()
-        mode_combo = ttk.Combobox(wifi_frame, textvariable=self.mode_var, values=["sta", "ap", "apsta"], width=27)
+        # Use device's actual role values from WNBCFG response
+        mode_combo = ttk.Combobox(wifi_frame, textvariable=self.mode_var, values=["ap", "sta"], width=27)
         mode_combo.grid(row=1, column=1, sticky="w", padx=5, pady=2)
         ttk.Button(wifi_frame, text="Get", command=lambda: self.get_config("mode")).grid(row=1, column=2, padx=2, pady=2)
         ttk.Button(wifi_frame, text="Set", command=lambda: self.set_config("mode", self.mode_var.get())).grid(row=1, column=3, padx=2, pady=2)
         
-        # Channel
+        # Channel (HaLow frequencies, not WiFi channels)
         ttk.Label(wifi_frame, text="Channel:").grid(row=2, column=0, sticky="w", padx=(0, 5), pady=2)
         self.channel_var = tk.StringVar()
-        ttk.Spinbox(wifi_frame, from_=1, to=14, textvariable=self.channel_var, width=28).grid(row=2, column=1, sticky="w", padx=5, pady=2)
+        # HaLow uses specific frequency channels, not 1-14 like WiFi
+        halow_channels = ["8640", "8660", "8680", "8700", "8720", "8740", "8760", "8780"]
+        channel_combo = ttk.Combobox(wifi_frame, textvariable=self.channel_var, values=halow_channels, width=27)
+        channel_combo.grid(row=2, column=1, sticky="w", padx=5, pady=2)
         ttk.Button(wifi_frame, text="Get", command=lambda: self.get_config("channel")).grid(row=2, column=2, padx=2, pady=2)
         ttk.Button(wifi_frame, text="Set", command=lambda: self.set_config("channel", self.channel_var.get())).grid(row=2, column=3, padx=2, pady=2)
         
@@ -383,22 +387,31 @@ Then restart this GUI."""
         security_frame = ttk.LabelFrame(scrollable_frame, text="Security Configuration", padding="10")
         security_frame.pack(fill="x", padx=10, pady=5)
         
-        # Key Management
-        ttk.Label(security_frame, text="Key Mgmt:").grid(row=0, column=0, sticky="w", padx=(0, 5), pady=2)
-        self.keymgmt_var = tk.StringVar()
-        keymgmt_combo = ttk.Combobox(security_frame, textvariable=self.keymgmt_var, 
-                                   values=["NONE", "WPA-PSK", "WPA2-PSK"], width=27)
-        keymgmt_combo.grid(row=0, column=1, sticky="w", padx=5, pady=2)
-        ttk.Button(security_frame, text="Get", command=lambda: self.get_config("keymgmt")).grid(row=0, column=2, padx=2, pady=2)
-        ttk.Button(security_frame, text="Set", command=lambda: self.set_config("keymgmt", self.keymgmt_var.get())).grid(row=0, column=3, padx=2, pady=2)
+        # Encryption (Device actually uses 'encrypt' parameter) 
+        ttk.Label(security_frame, text="Encrypt:").grid(row=0, column=0, sticky="w", padx=(0, 5), pady=2)
+        self.encrypt_var = tk.StringVar()
+        encrypt_combo = ttk.Combobox(security_frame, textvariable=self.encrypt_var, 
+                                   values=["0", "1"], width=27)
+        encrypt_combo.grid(row=0, column=1, sticky="w", padx=5, pady=2)
+        ttk.Button(security_frame, text="Get", command=lambda: self.get_config("encrypt")).grid(row=0, column=2, padx=2, pady=2)
+        ttk.Button(security_frame, text="Set", command=lambda: self.set_config("encrypt", self.encrypt_var.get())).grid(row=0, column=3, padx=2, pady=2)
         
-        # PSK
-        ttk.Label(security_frame, text="PSK:").grid(row=1, column=0, sticky="w", padx=(0, 5), pady=2)
-        self.psk_var = tk.StringVar()
-        psk_entry = ttk.Entry(security_frame, textvariable=self.psk_var, show="*", width=30)
-        psk_entry.grid(row=1, column=1, sticky="w", padx=5, pady=2)
-        ttk.Button(security_frame, text="Get", command=lambda: self.get_config("psk")).grid(row=1, column=2, padx=2, pady=2)
-        ttk.Button(security_frame, text="Set", command=lambda: self.set_config("psk", self.psk_var.get())).grid(row=1, column=3, padx=2, pady=2)
+        # Key (Device uses 'key' parameter, not 'psk')
+        ttk.Label(security_frame, text="Key:").grid(row=1, column=0, sticky="w", padx=(0, 5), pady=2)
+        self.key_var = tk.StringVar()
+        key_entry = ttk.Entry(security_frame, textvariable=self.key_var, show="*", width=30)
+        key_entry.grid(row=1, column=1, sticky="w", padx=5, pady=2)
+        ttk.Button(security_frame, text="Get", command=lambda: self.get_config("key")).grid(row=1, column=2, padx=2, pady=2)
+        ttk.Button(security_frame, text="Set", command=lambda: self.set_config("key", self.key_var.get())).grid(row=1, column=3, padx=2, pady=2)
+        
+        # BSS Bandwidth (Important HaLow parameter)
+        ttk.Label(security_frame, text="BSS BW:").grid(row=2, column=0, sticky="w", padx=(0, 5), pady=2)
+        self.bss_bw_var = tk.StringVar()
+        bss_bw_combo = ttk.Combobox(security_frame, textvariable=self.bss_bw_var, 
+                                   values=["1", "2", "4"], width=27)  # 1=1MHz, 2=2MHz, 4=4MHz
+        bss_bw_combo.grid(row=2, column=1, sticky="w", padx=5, pady=2)
+        ttk.Button(security_frame, text="Get", command=lambda: self.get_config("bss_bw")).grid(row=2, column=2, padx=2, pady=2)
+        ttk.Button(security_frame, text="Set", command=lambda: self.set_config("bss_bw", self.bss_bw_var.get())).grid(row=2, column=3, padx=2, pady=2)
         
         # Auto-configuration from device
         auto_frame = ttk.LabelFrame(scrollable_frame, text="Auto Configuration", padding="10")
@@ -955,18 +968,74 @@ Then restart this GUI."""
             self.message_queue.put(("command_error", error_details))
             
     def get_config(self, param):
-        """Get configuration parameter"""
-        command = f"at+{param}?"
+        """Get configuration parameter with proper AT command mapping"""
+        # Map GUI parameter names to actual AT command names
+        param_mapping = {
+            'mode': 'mode',  # Try mode first, may need to be 'role' or 'wifimode'
+            'channel': 'channel',  # Device uses 'channel' AT command
+            'ssid': 'ssid',
+            'txpower': 'txpower',
+            'encrypt': 'encrypt',  # Device uses 'encrypt' parameter
+            'key': 'key',  # Device uses 'key' parameter  
+            'bss_bw': 'bss_bw'  # Important HaLow bandwidth parameter
+        }
+        
+        actual_param = param_mapping.get(param, param)
+        
+        # Validate that this is a supported GET command
+        if actual_param not in PRODUCTION_GET_COMMANDS:
+            self.log_message(f"Warning: {actual_param} not in supported GET commands")
+            self.log_message(f"Supported GET commands: {', '.join(PRODUCTION_GET_COMMANDS[:10])}...")
+        
+        command = f"at+{actual_param}?"
+        self.log_message(f"Getting {param} -> {command}")
         self.command_var.set(command)
         self.send_command()
         
     def set_config(self, param, value):
-        """Set configuration parameter"""
+        """Set configuration parameter with validation and mapping"""
         if not value:
             messagebox.showwarning("No Value", f"Please enter a value for {param}")
             return
+        
+        # Map GUI parameter names to actual AT command names
+        param_mapping = {
+            'mode': 'mode',  # Try mode first, may need to be 'role' or 'wifimode' 
+            'channel': 'channel',  # Device uses 'channel' AT command
+            'ssid': 'ssid',
+            'txpower': 'txpower', 
+            'encrypt': 'encrypt',  # Device uses 'encrypt' parameter
+            'key': 'key',  # Device uses 'key' parameter
+            'bss_bw': 'bss_bw'  # Important HaLow bandwidth parameter
+        }
+        
+        actual_param = param_mapping.get(param, param)
+        
+        # Validate that this is a supported SET command
+        if actual_param not in PRODUCTION_SET_COMMANDS:
+            messagebox.showerror("Unsupported Command", 
+                               f"Parameter '{actual_param}' is not supported by the device.\n"
+                               f"Supported SET commands: {', '.join(PRODUCTION_SET_COMMANDS[:15])}...")
+            return
+        
+        # Validate channel values for HaLow
+        if param == 'channel':
+            valid_channels = ["8640", "8660", "8680", "8700", "8720", "8740", "8760", "8780"]
+            if value not in valid_channels:
+                messagebox.showerror("Invalid Channel", 
+                                   f"Channel must be one of: {', '.join(valid_channels)}\n"
+                                   f"HaLow uses frequency channels, not WiFi channels 1-14.")
+                return
+        
+        # Validate mode values
+        if param == 'mode':
+            valid_modes = ["ap", "sta"]
+            if value not in valid_modes:
+                messagebox.showerror("Invalid Mode", f"Mode must be one of: {', '.join(valid_modes)}")
+                return
             
-        command = f"at+{param}={value}"
+        command = f"at+{actual_param}={value}"
+        self.log_message(f"Setting {param} = {value} -> {command}")
         self.command_var.set(command)
         self.send_command()
         
@@ -1168,6 +1237,21 @@ Then restart this GUI."""
                 except ValueError:
                     pass
             
+            if 'encrypt' in config:
+                self.encrypt_var.set(config['encrypt'])
+                self.log_message(f"Set Encrypt: {config['encrypt']}")
+            
+            if 'key' in config or 'psk' in config:
+                key_value = config.get('key', config.get('psk', ''))
+                if key_value:
+                    self.key_var.set(key_value)
+                    self.log_message(f"Set Key: [hidden]")
+            
+            if 'bss_bw' in config:
+                self.bss_bw_var.set(config['bss_bw'])
+                self.log_message(f"Set BSS BW: {config['bss_bw']}")
+            
+            # Legacy encrypt handling for old field
             if 'encrypt' in config:
                 encrypt_map = {'0': 'NONE', '1': 'WPA-PSK', '2': 'WPA2-PSK'}
                 if config['encrypt'] in encrypt_map:
