@@ -214,7 +214,7 @@ Then restart this GUI."""
         self.interface_combo.grid(row=0, column=1, sticky="ew", padx=(0, 5))
         
         self.refresh_interfaces_btn = ttk.Button(interface_frame, text="Refresh", 
-                                               command=self.detect_interfaces)
+                                               command=self.refresh_interfaces)
         self.refresh_interfaces_btn.grid(row=0, column=2, padx=5)
         
         interface_frame.columnconfigure(1, weight=1)
@@ -534,6 +534,51 @@ Then restart this GUI."""
             import traceback
             self.log_message(f"Stack trace: {traceback.format_exc()}")
             self.interface_combo['values'] = ["auto"]
+            
+    def refresh_interfaces(self):
+        """Refresh the interface list and provide user feedback"""
+        self.log_message("Refreshing network interfaces...")
+        self.status_var.set("Refreshing interfaces...")
+        
+        # Save current selection
+        current_selection = self.interface_var.get()
+        
+        try:
+            # Temporarily disable the button and change text
+            self.refresh_interfaces_btn.config(state="disabled", text="Refreshing...")
+            self.root.update()  # Force GUI update
+            
+            # Call the detection method
+            self.detect_interfaces()
+            
+            # Try to restore the previous selection if it still exists
+            new_values = self.interface_combo['values']
+            if current_selection in new_values:
+                self.interface_var.set(current_selection)
+                self.log_message(f"Restored previous selection: {current_selection}")
+            else:
+                # If previous selection no longer exists, try to find a similar one
+                for value in new_values:
+                    if current_selection != "auto" and current_selection.split(" - ")[0] in value:
+                        self.interface_var.set(value)
+                        self.log_message(f"Updated selection to: {value}")
+                        break
+                else:
+                    # Fall back to auto
+                    self.interface_var.set("auto")
+                    self.log_message("Fell back to 'auto' selection")
+            
+            self.log_message(f"Interface refresh completed - found {len(new_values)} interfaces")
+            self.status_var.set("Interface refresh completed")
+            
+        except Exception as e:
+            self.log_message(f"Error during interface refresh: {e}")
+            self.status_var.set("Interface refresh failed")
+            messagebox.showerror("Refresh Error", f"Failed to refresh interfaces:\n{e}")
+            
+        finally:
+            # Always re-enable the button and restore text
+            self.refresh_interfaces_btn.config(state="normal", text="Refresh")
             
     def start_scan(self):
         """Start device scanning using the original tool"""
